@@ -1,0 +1,70 @@
+### OS ###
+.DS_Store
+Thumbs.db
+
+### Build ###
+/build/
+/target/
+/out/
+/bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### Gradle ###
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+gradle-app.setting
+gradlew.bat
+gradlew
+
+### Spring Boot / Application ###
+# 모든 yml, yaml 파일 제외
+*.yml
+*.yaml
+
+# 단, 샘플 설정파일은 예외로 유지 (예: application-sample.yml)
+!application-sample.yml
+!application-example.yml
+
+# 로그 파일 제외
+*.log
+*.log.*
+
+# 임시 파일, 캐시
+*.tmp
+*.swp
+*.swo
+*.bak
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### STS / Eclipse ###
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### 기타 ###
+HELP.md
