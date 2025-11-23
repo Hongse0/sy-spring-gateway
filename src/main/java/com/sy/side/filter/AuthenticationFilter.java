@@ -26,8 +26,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
 
     // 인증 없이 통과시킬 경로들
     private static final List<String> openPaths = List.of(
-            "/v1/member/join",
-            "/v1/member/login",
+            "/v1/cms/auth/signup",
             "/v1/cms"
     );
 
