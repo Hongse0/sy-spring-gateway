@@ -1,15 +1,11 @@
 package com.sy.side.filter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sy.side.common.entity.MemberSession;
-import com.sy.side.common.entity.UserSession;
-import com.sy.side.common.entity.UserSession.UserType;
 import com.sy.side.jwt.JwtProperties;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import javax.crypto.SecretKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,15 +19,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
-
 @Component
 @Slf4j
 @RequiredArgsConstructor
 public class AuthenticationFilter implements GlobalFilter, Ordered {
 
     private final JwtProperties jwtProperties;
-    private final ObjectMapper objectMapper;
 
     // 인증 없이 통과시킬 경로들
     private static final List<String> openPaths = List.of(
@@ -40,50 +33,75 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             "/v1/cms"
     );
 
+    // downstream으로 전달할 헤더 키 (통일해두면 서비스에서 파싱하기 편함)
+    private static final String H_USER_TYPE  = "X-USER-TYPE";   // 예: MEMBER
+    private static final String H_MEMBER_ID  = "X-MEMBER-ID";   // 예: 123
+    private static final String H_LOGIN_TYPE = "X-LOGIN-TYPE";  // 예: LOCAL, KAKAO ...
+    private static final String H_SNS_TYPE   = "X-SNS-TYPE";    // 예: KAKAO, NAVER ...
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String path = exchange.getRequest().getURI().getPath();
         log.debug("[GATEWAY] 요청 path = {}", path);
 
-        // openPaths에 포함되면 바로 통과 (토큰 없어도 됨)
+        // openPaths는 토큰 없이 통과
         if (isOpenPath(path)) {
             return chain.filter(exchange);
         }
 
-        // 그 외 요청은 JWT 검사
+        // JWT 추출
         String token = extractToken(exchange.getRequest().getHeaders());
-
         if (token == null) {
-            log.warn("[GATEWAY] 토큰 없음 -> 401");
+            log.warn("[GATEWAY] 토큰 없음 -> 401, path={}", path);
             exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
             return exchange.getResponse().setComplete();
         }
 
+        // JWT 검증 및 Claims 파싱
         Claims claims;
         try {
             claims = parseClaims(token);
         } catch (Exception e) {
-            log.warn("[GATEWAY] 토큰 검증 실패 -> 401", e);
+            log.warn("[GATEWAY] 토큰 검증 실패 -> 401, path={}", path, e);
             exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
             return exchange.getResponse().setComplete();
         }
 
-        // Claims -> UserSession 으로 변환
-        UserSession userSession = toUserSession(claims);
-
-        String sessionJson;
+        // Claims에서 필요한 값 추출 (토큰 발급 시 넣은 claim key와 동일해야 함)
+        // 타입 이슈 방지: Number로 받고 longValue()로 변환
+        String sub = claims.getSubject(); // == claims.get("sub", String.class) 과 동일
+        Long memberId = null;
         try {
-            sessionJson = objectMapper.writeValueAsString(userSession);
-        } catch (JsonProcessingException e) {
-            log.error("[GATEWAY] UserSession 직렬화 실패", e);
-            exchange.getResponse().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
+            memberId = Long.parseLong(sub);
+        } catch (Exception e) {
+            // sub가 숫자가 아니면 인증 실패 처리
+        }
+
+        String loginType = claims.get("loginType", String.class);
+        String snsType = claims.get("snsType", String.class);
+
+        // 필수값 체크(원하면 더 엄격하게)
+        if (memberId == null) {
+            log.warn("[GATEWAY] 토큰 claim(memberId) 누락 -> 401, path={}", path);
+            exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
             return exchange.getResponse().setComplete();
         }
 
-        // 4. 기존 요청에 user-session 헤더를 추가해서 하위 서비스로 전달
+        // 하위 서비스로 사용자 정보 헤더 전달
+        Long finalMemberId = memberId;
         ServerHttpRequest mutatedRequest = exchange.getRequest()
                 .mutate()
-                .header("user-session", sessionJson)
+                .headers(httpHeaders -> {
+                    httpHeaders.remove(H_USER_TYPE);
+                    httpHeaders.remove(H_MEMBER_ID);
+                    httpHeaders.remove(H_LOGIN_TYPE);
+                    httpHeaders.remove(H_SNS_TYPE);
+
+                    httpHeaders.add(H_USER_TYPE, "MEMBER");
+                    httpHeaders.add(H_MEMBER_ID, String.valueOf(finalMemberId));
+                    if (loginType != null) httpHeaders.add(H_LOGIN_TYPE, loginType);
+                    if (snsType != null) httpHeaders.add(H_SNS_TYPE, snsType);
+                })
                 .build();
 
         ServerWebExchange mutatedExchange = exchange.mutate()
@@ -115,50 +133,8 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
                 .getBody();
     }
 
-    /**
-     * JWT 클레임을 UserSession 객체로 변환
-     * 여기서 클레임 키는 "토큰 발급 시에" 넣어준 이름과 맞춰야 함
-     */
-    private UserSession toUserSession(Claims claims) {
-
-        Long memberId = claims.get("memberId", Long.class);
-        String loginType = claims.get("loginType", String.class);
-        String snsType = claims.get("snsType", String.class);
-
-        // MemberSession 생성
-        MemberSession memberSession = MemberSession.builder()
-                .memberId(memberId != null ? memberId : 0L)
-                .loginType(loginType)
-                .snsType(snsType)
-                .build();
-
-        // UserSession 생성
-        return UserSession.builder()
-                .userType(UserSession.UserType.MEMBER)
-                .memberSession(memberSession)
-                .build();
-    }
-
-    private boolean validateToken(String token) {
-        try {
-            SecretKey key = Keys.hmacShaKeyFor(jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8));
-
-            Claims claims = Jwts.parserBuilder()
-                    .setSigningKey(key)
-                    .build()
-                    .parseClaimsJws(token)
-                    .getBody();
-
-            // 검증 성공
-            return true;
-        } catch (Exception e) {
-            // 검증 실패
-            return false;
-        }
-    }
-
     @Override
     public int getOrder() {
-        return -1; // 필터 순서 조정 (낮을수록 먼저 실행)
+        return -1; // 낮을수록 먼저 실행
     }
 }
