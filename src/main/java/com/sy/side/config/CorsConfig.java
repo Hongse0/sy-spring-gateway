@@ -17,7 +17,7 @@ public class CorsConfig {
 
         config.setAllowedOrigins(Arrays.asList(
                 "http://localhost:3000",
-                "https://react-workspace-ts.pages.dev"
+                "https://*.pages.dev"
         ));
         config.setAllowedHeaders(Arrays.asList("*"));
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
